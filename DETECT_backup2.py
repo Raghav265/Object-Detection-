@@ -1,17 +1,19 @@
 # ===================== TEXT TO SPEECH =====================
 import pyttsx3
+import time
 import asyncio
 import edge_tts
 import pygame
 import tempfile
 # =========================================================
 
+# Ultralytics 🚀 AGPL-3.0 License
 import argparse
 import os
+import platform
 import sys
 from pathlib import Path
 import torch
-import cv2
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]
@@ -22,7 +24,6 @@ ROOT = Path(os.path.relpath(ROOT, Path.cwd()))
 pygame.mixer.init()
 
 async def speak_async(text):
-
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f:
         filename = f.name
 
@@ -36,18 +37,23 @@ async def speak_async(text):
         await asyncio.sleep(0.1)
 
 
-# ===================== YOLO IMPORTS =====================
-
 from ultralytics.utils.plotting import Annotator, colors
 from models.common import DetectMultiBackend
-from utils.dataloaders import LoadStreams
+from utils.dataloaders import IMG_FORMATS, VID_FORMATS, LoadImages, LoadScreenshots, LoadStreams
 from utils.general import (
     LOGGER,
     Profile,
+    check_file,
     check_img_size,
+    check_imshow,
+    check_requirements,
+    colorstr,
+    cv2,
+    increment_path,
     non_max_suppression,
     print_args,
     scale_boxes,
+    strip_optimizer,
 )
 from utils.torch_utils import select_device, smart_inference_mode
 
@@ -61,26 +67,30 @@ CLOSE_OBJECT_AREA = 20000
 def run(
     weights=ROOT / "yolov5s.pt",
     source=0,
+    data=ROOT / "data/coco128.yaml",
     imgsz=(640, 640),
     conf_thres=0.25,
     iou_thres=0.45,
+    max_det=1000,
     device="",
+    view_img=True,
 ):
 
     source = str(source)
 
     engine = pyttsx3.init()
     engine.setProperty("rate", 170)
+    engine.setProperty("volume", 1.0)
 
     is_speaking = False
     spoken_objects = {}
     disappearance_frames = 20
 
-    last_navigation_message = None
+    save_img = False
+    webcam = True
 
     device = select_device(device)
-
-    model = DetectMultiBackend(weights, device=device)
+    model = DetectMultiBackend(weights, device=device, data=data)
 
     stride, names, pt = model.stride, model.names, model.pt
     imgsz = check_img_size(imgsz, s=stride)
@@ -95,17 +105,10 @@ def run(
 
         current_frame_objects = set()
 
-        # Navigation flags
-        left_obstacle = False
-        center_obstacle = False
-        right_obstacle = False
-
         with dt[0]:
-
             im = torch.from_numpy(im).to(model.device)
             im = im.float()
             im /= 255
-
             if len(im.shape) == 3:
                 im = im[None]
 
@@ -136,25 +139,20 @@ def run(
                     height = y2 - y1
                     area = width * height
 
-                    # Ignore far objects
+                    # -------- FILTER FAR OBJECTS --------
                     if area < CLOSE_OBJECT_AREA:
                         continue
+                    # -----------------------------------
 
                     frame_width = im0.shape[1]
                     center_x = (x1 + x2) / 2
 
-                    # Determine zone
                     if center_x < frame_width / 3:
                         position = "on your left"
-                        left_obstacle = True
-
                     elif center_x < 2 * frame_width / 3:
                         position = "in front of you"
-                        center_obstacle = True
-
                     else:
                         position = "on your right"
-                        right_obstacle = True
 
                     speech_text = f"{object_name} {position}"
 
@@ -179,68 +177,35 @@ def run(
 
             im0 = annotator.result()
 
-            # ===== SMART NAVIGATION =====
-
-            navigation_message = None
-
-            if not center_obstacle:
-                navigation_message = "Path clear ahead"
-
-            elif center_obstacle and not left_obstacle:
-                navigation_message = "Obstacle ahead move left"
-
-            elif center_obstacle and not right_obstacle:
-                navigation_message = "Obstacle ahead move right"
-
-            else:
-                navigation_message = "Obstacle on both sides move carefully"
-
-            if navigation_message and navigation_message != last_navigation_message:
-                print("Navigation:", navigation_message)
-                try:
-                    asyncio.run(speak_async(navigation_message))
-                except RuntimeError:
-                    pass
-                last_navigation_message = navigation_message
-
-            # Clean old spoken objects
-
             for obj in list(spoken_objects.keys()):
                 if obj not in current_frame_objects:
                     spoken_objects[obj] += 1
-
                     if spoken_objects[obj] > disappearance_frames:
                         del spoken_objects[obj]
 
-            cv2.imshow("Detection", im0)
+            if view_img:
 
-            if cv2.waitKey(1) == ord("q"):
-                break
+                cv2.imshow("Detection", im0)
+
+                if cv2.waitKey(1) == ord("q"):
+                    break
 
         LOGGER.info(f"{s}{dt[1].dt * 1e3:.1f}ms")
 
 
 def parse_opt():
-
     parser = argparse.ArgumentParser()
-
     parser.add_argument("--weights", type=str, default="yolov5s.pt")
     parser.add_argument("--source", type=str, default="0")
-
     opt = parser.parse_args()
-
     print_args(vars(opt))
-
     return opt
 
 
 def main(opt):
-
     run(**vars(opt))
 
 
 if __name__ == "__main__":
-
     opt = parse_opt()
-
     main(opt)
