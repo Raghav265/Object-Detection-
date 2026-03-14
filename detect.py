@@ -239,11 +239,11 @@ def run(
 
                 cv2.imshow("Detection", im0)
 
-                if cv2.waitKey(1) == ord("q"):
-                    cv2.destroyAllWindows()
-                    return
+                if cv2.waitKey(1) & 0xFF == ord("q"):
+                    break
 
         LOGGER.info(f"{s}{dt[1].dt * 1e3:.1f}ms")
+        cv2.destroyAllWindows()
 
 
 # ===================== CLI =====================
