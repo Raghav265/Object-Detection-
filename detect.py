@@ -1,10 +1,10 @@
 # ===================== TEXT TO SPEECH =====================
-import pyttsx3
 import asyncio
 import edge_tts
 import pygame
 import tempfile
 import threading
+from queue import Queue
 # =========================================================
 
 import argparse
@@ -24,12 +24,9 @@ ROOT = Path(os.path.relpath(ROOT, Path.cwd()))
 
 pygame.mixer.init()
 
+# ===================== SPEECH QUEUE =====================
 
-# ===================== ASYNC SPEECH =====================
-
-def speak(text):
-    """Run speech asynchronously so detection does not freeze"""
-    threading.Thread(target=lambda: asyncio.run(speak_async(text)), daemon=True).start()
+speech_queue = Queue()
 
 
 async def speak_async(text):
@@ -45,6 +42,24 @@ async def speak_async(text):
 
     while pygame.mixer.music.get_busy():
         await asyncio.sleep(0.1)
+
+
+def speech_worker():
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    while True:
+        text = speech_queue.get()
+
+        if text is None:
+            break
+
+        loop.run_until_complete(speak_async(text))
+
+
+# Start speech thread
+threading.Thread(target=speech_worker, daemon=True).start()
 
 
 # ===================== YOLO IMPORTS =====================
@@ -72,9 +87,9 @@ CLOSE_OBJECT_AREA = 20000
 
 @smart_inference_mode()
 def run(
-    weights=ROOT / "yolov5s.pt",
+    weights=ROOT / "yolov5n.pt",  # Faster model for Raspberry Pi
     source=0,
-    imgsz=(320, 320),
+    imgsz=(256, 256),  # Lower resolution for speed
     conf_thres=0.25,
     iou_thres=0.45,
     device="",
@@ -82,9 +97,6 @@ def run(
 ):
 
     source = str(source)
-
-    engine = pyttsx3.init()
-    engine.setProperty("rate", 170)
 
     spoken_objects = {}
     disappearance_frames = 20
@@ -97,7 +109,6 @@ def run(
     stride, names, pt = model.stride, model.names, model.pt
     imgsz = check_img_size(imgsz, s=stride)
 
-    # Skip frames to reduce lag on Raspberry Pi
     dataset = LoadStreams(source, img_size=imgsz, stride=stride, vid_stride=2)
 
     model.warmup(imgsz=(1, 3, *imgsz))
@@ -160,14 +171,12 @@ def run(
                     height = y2 - y1
                     area = width * height
 
-                    # Ignore far objects
                     if area < CLOSE_OBJECT_AREA:
                         continue
 
                     frame_width = im0.shape[1]
                     center_x = (x1 + x2) / 2
 
-                    # Determine zone
                     if center_x < frame_width / 3:
                         position = "on your left"
                         left_obstacle = True
@@ -188,7 +197,7 @@ def run(
 
                         print("Speaking:", speech_text)
 
-                        speak(speech_text)
+                        speech_queue.put(speech_text)
 
                         spoken_objects[speech_text] = 0
 
@@ -218,7 +227,7 @@ def run(
 
                 print("Navigation:", navigation_message)
 
-                speak(navigation_message)
+                speech_queue.put(navigation_message)
 
                 last_navigation_message = navigation_message
 
@@ -240,10 +249,10 @@ def run(
                 cv2.imshow("Detection", im0)
 
                 if cv2.waitKey(1) & 0xFF == ord("q"):
-                    break
+                    cv2.destroyAllWindows()
+                    return
 
         LOGGER.info(f"{s}{dt[1].dt * 1e3:.1f}ms")
-        cv2.destroyAllWindows()
 
 
 # ===================== CLI =====================
@@ -252,7 +261,7 @@ def parse_opt():
 
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--weights", type=str, default="yolov5s.pt")
+    parser.add_argument("--weights", type=str, default="yolov5n.pt")
     parser.add_argument("--source", type=str, default="0")
 
     opt = parser.parse_args()
