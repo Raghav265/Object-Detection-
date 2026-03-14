@@ -4,6 +4,7 @@ import asyncio
 import edge_tts
 import pygame
 import tempfile
+import threading
 # =========================================================
 
 import argparse
@@ -15,11 +16,21 @@ import cv2
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]
+
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
+
 ROOT = Path(os.path.relpath(ROOT, Path.cwd()))
 
 pygame.mixer.init()
+
+
+# ===================== ASYNC SPEECH =====================
+
+def speak(text):
+    """Run speech asynchronously so detection does not freeze"""
+    threading.Thread(target=lambda: asyncio.run(speak_async(text)), daemon=True).start()
+
 
 async def speak_async(text):
 
@@ -52,19 +63,22 @@ from utils.general import (
 from utils.torch_utils import select_device, smart_inference_mode
 
 
-# -------- DISTANCE FILTER --------
-CLOSE_OBJECT_AREA = 20000
-# ---------------------------------
+# ===================== DISTANCE FILTER =====================
 
+CLOSE_OBJECT_AREA = 20000
+
+
+# ===================== MAIN RUN FUNCTION =====================
 
 @smart_inference_mode()
 def run(
     weights=ROOT / "yolov5s.pt",
     source=0,
-    imgsz=(640, 640),
+    imgsz=(320, 320),
     conf_thres=0.25,
     iou_thres=0.45,
     device="",
+    view_img=True,
 ):
 
     source = str(source)
@@ -72,10 +86,8 @@ def run(
     engine = pyttsx3.init()
     engine.setProperty("rate", 170)
 
-    is_speaking = False
     spoken_objects = {}
     disappearance_frames = 20
-
     last_navigation_message = None
 
     device = select_device(device)
@@ -85,20 +97,26 @@ def run(
     stride, names, pt = model.stride, model.names, model.pt
     imgsz = check_img_size(imgsz, s=stride)
 
-    dataset = LoadStreams(source, img_size=imgsz, stride=stride)
+    # Skip frames to reduce lag on Raspberry Pi
+    dataset = LoadStreams(source, img_size=imgsz, stride=stride, vid_stride=2)
 
     model.warmup(imgsz=(1, 3, *imgsz))
 
-    seen, windows, dt = 0, [], (Profile(device=device), Profile(device=device), Profile(device=device))
+    seen, windows, dt = 0, [], (
+        Profile(device=device),
+        Profile(device=device),
+        Profile(device=device),
+    )
 
     for path, im, im0s, vid_cap, s in dataset:
 
         current_frame_objects = set()
 
-        # Navigation flags
         left_obstacle = False
         center_obstacle = False
         right_obstacle = False
+
+        # ================= PREPROCESS =================
 
         with dt[0]:
 
@@ -109,8 +127,12 @@ def run(
             if len(im.shape) == 3:
                 im = im[None]
 
+        # ================= INFERENCE =================
+
         with dt[1]:
             pred = model(im)
+
+        # ================= NMS =================
 
         with dt[2]:
             pred = non_max_suppression(pred, conf_thres, iou_thres)
@@ -123,7 +145,9 @@ def run(
 
             if len(det):
 
-                det[:, :4] = scale_boxes(im.shape[2:], det[:, :4], im0.shape).round()
+                det[:, :4] = scale_boxes(
+                    im.shape[2:], det[:, :4], im0.shape
+                ).round()
 
                 for *xyxy, conf, cls in reversed(det):
 
@@ -160,17 +184,12 @@ def run(
 
                     current_frame_objects.add(speech_text)
 
-                    if speech_text not in spoken_objects and not is_speaking:
+                    if speech_text not in spoken_objects:
 
                         print("Speaking:", speech_text)
 
-                        try:
-                            is_speaking = True
-                            asyncio.run(speak_async(speech_text))
-                        except RuntimeError:
-                            pass
+                        speak(speech_text)
 
-                        is_speaking = False
                         spoken_objects[speech_text] = 0
 
                     label = f"{object_name} {position} {conf:.2f}"
@@ -179,7 +198,7 @@ def run(
 
             im0 = annotator.result()
 
-            # ===== SMART NAVIGATION =====
+            # ================= SMART NAVIGATION =================
 
             navigation_message = None
 
@@ -195,30 +214,39 @@ def run(
             else:
                 navigation_message = "Obstacle on both sides move carefully"
 
-            if navigation_message and navigation_message != last_navigation_message:
+            if navigation_message != last_navigation_message:
+
                 print("Navigation:", navigation_message)
-                try:
-                    asyncio.run(speak_async(navigation_message))
-                except RuntimeError:
-                    pass
+
+                speak(navigation_message)
+
                 last_navigation_message = navigation_message
 
-            # Clean old spoken objects
+            # ================= CLEAN MEMORY =================
 
             for obj in list(spoken_objects.keys()):
+
                 if obj not in current_frame_objects:
+
                     spoken_objects[obj] += 1
 
                     if spoken_objects[obj] > disappearance_frames:
                         del spoken_objects[obj]
 
-            cv2.imshow("Detection", im0)
+            # ================= DISPLAY WINDOW =================
 
-            if cv2.waitKey(1) == ord("q"):
-                break
+            if view_img:
+
+                cv2.imshow("Detection", im0)
+
+                if cv2.waitKey(1) == ord("q"):
+                    cv2.destroyAllWindows()
+                    return
 
         LOGGER.info(f"{s}{dt[1].dt * 1e3:.1f}ms")
 
+
+# ===================== CLI =====================
 
 def parse_opt():
 
