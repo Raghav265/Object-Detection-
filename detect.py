@@ -1,18 +1,18 @@
 # ===================== TEXT TO SPEECH =====================
-import asyncio
-import edge_tts
-import pygame
-import tempfile
-import threading
-from queue import Queue
 # =========================================================
-
 import argparse
+import asyncio
 import os
 import sys
+import tempfile
+import threading
 from pathlib import Path
-import torch
+from queue import Queue
+
 import cv2
+import edge_tts
+import pygame
+import torch
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]
@@ -65,6 +65,7 @@ threading.Thread(target=speech_worker, daemon=True).start()
 # ===================== YOLO IMPORTS =====================
 
 from ultralytics.utils.plotting import Annotator, colors
+
 from models.common import DetectMultiBackend
 from utils.dataloaders import LoadStreams
 from utils.general import (
@@ -77,13 +78,13 @@ from utils.general import (
 )
 from utils.torch_utils import select_device, smart_inference_mode
 
-
 # ===================== DISTANCE FILTER =====================
 
 CLOSE_OBJECT_AREA = 20000
 
 
 # ===================== MAIN RUN FUNCTION =====================
+
 
 @smart_inference_mode()
 def run(
@@ -106,21 +107,24 @@ def run(
 
     model = DetectMultiBackend(weights, device=device)
 
-    stride, names, pt = model.stride, model.names, model.pt
+    stride, names, _pt = model.stride, model.names, model.pt
     imgsz = check_img_size(imgsz, s=stride)
 
     dataset = LoadStreams(source, img_size=imgsz, stride=stride, vid_stride=2)
 
     model.warmup(imgsz=(1, 3, *imgsz))
 
-    seen, windows, dt = 0, [], (
-        Profile(device=device),
-        Profile(device=device),
-        Profile(device=device),
+    _seen, _windows, dt = (
+        0,
+        [],
+        (
+            Profile(device=device),
+            Profile(device=device),
+            Profile(device=device),
+        ),
     )
 
     for path, im, im0s, vid_cap, s in dataset:
-
         current_frame_objects = set()
 
         left_obstacle = False
@@ -130,7 +134,6 @@ def run(
         # ================= PREPROCESS =================
 
         with dt[0]:
-
             im = torch.from_numpy(im).to(model.device)
             im = im.float()
             im /= 255
@@ -149,19 +152,14 @@ def run(
             pred = non_max_suppression(pred, conf_thres, iou_thres)
 
         for i, det in enumerate(pred):
-
             im0 = im0s[i].copy()
 
             annotator = Annotator(im0, line_width=3, example=str(names))
 
             if len(det):
-
-                det[:, :4] = scale_boxes(
-                    im.shape[2:], det[:, :4], im0.shape
-                ).round()
+                det[:, :4] = scale_boxes(im.shape[2:], det[:, :4], im0.shape).round()
 
                 for *xyxy, conf, cls in reversed(det):
-
                     c = int(cls)
                     object_name = names[c]
 
@@ -194,7 +192,6 @@ def run(
                     current_frame_objects.add(speech_text)
 
                     if speech_text not in spoken_objects:
-
                         print("Speaking:", speech_text)
 
                         speech_queue.put(speech_text)
@@ -224,7 +221,6 @@ def run(
                 navigation_message = "Obstacle on both sides move carefully"
 
             if navigation_message != last_navigation_message:
-
                 print("Navigation:", navigation_message)
 
                 speech_queue.put(navigation_message)
@@ -234,9 +230,7 @@ def run(
             # ================= CLEAN MEMORY =================
 
             for obj in list(spoken_objects.keys()):
-
                 if obj not in current_frame_objects:
-
                     spoken_objects[obj] += 1
 
                     if spoken_objects[obj] > disappearance_frames:
@@ -245,7 +239,6 @@ def run(
             # ================= DISPLAY WINDOW =================
 
             if view_img:
-
                 cv2.imshow("Detection", im0)
 
                 if cv2.waitKey(1) & 0xFF == ord("q"):
@@ -256,6 +249,7 @@ def run(
 
 
 # ===================== CLI =====================
+
 
 def parse_opt():
 
@@ -277,7 +271,6 @@ def main(opt):
 
 
 if __name__ == "__main__":
-
     opt = parse_opt()
 
     main(opt)
