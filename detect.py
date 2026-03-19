@@ -5,6 +5,7 @@ import pygame
 import tempfile
 import threading
 from queue import Queue
+import time
 # =========================================================
 
 import argparse
@@ -24,42 +25,73 @@ ROOT = Path(os.path.relpath(ROOT, Path.cwd()))
 
 pygame.mixer.init()
 
-# ===================== SPEECH QUEUE =====================
+# ===================== SPEECH CONTROL =====================
 
-speech_queue = Queue()
+speech_queue = Queue(maxsize=3)
+last_spoken_time = {}
+
+SPEAK_COOLDOWN = 2
+NAV_COOLDOWN = 2
 
 
 async def speak_async(text):
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f:
+            filename = f.name
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f:
-        filename = f.name
+        communicate = edge_tts.Communicate(text, voice="en-US-AriaNeural")
+        await communicate.save(filename)
 
-    communicate = edge_tts.Communicate(text, voice="en-US-AriaNeural")
-    await communicate.save(filename)
+        pygame.mixer.music.load(filename)
+        pygame.mixer.music.play()
 
-    pygame.mixer.music.load(filename)
-    pygame.mixer.music.play()
+        while pygame.mixer.music.get_busy():
+            await asyncio.sleep(0.05)
 
-    while pygame.mixer.music.get_busy():
-        await asyncio.sleep(0.1)
+    except Exception as e:
+        print("TTS Error:", e)
 
 
 def speech_worker():
-
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
     while True:
         text = speech_queue.get()
-
         if text is None:
             break
 
         loop.run_until_complete(speak_async(text))
 
 
-# Start speech thread
 threading.Thread(target=speech_worker, daemon=True).start()
+
+
+def speak(text):
+    current_time = time.time()
+
+    if text in last_spoken_time:
+        if current_time - last_spoken_time[text] < SPEAK_COOLDOWN:
+            return
+
+    last_spoken_time[text] = current_time
+
+    if speech_queue.full():
+        try:
+            speech_queue.get_nowait()
+        except:
+            pass
+
+    print("Speaking:", text)
+    speech_queue.put(text)
+
+
+# ===================== BLOCKING SPEECH =====================
+
+def speak_blocking(text):
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(speak_async(text))
 
 
 # ===================== YOLO IMPORTS =====================
@@ -83,13 +115,13 @@ from utils.torch_utils import select_device, smart_inference_mode
 CLOSE_OBJECT_AREA = 20000
 
 
-# ===================== MAIN RUN FUNCTION =====================
+# ===================== MAIN RUN =====================
 
 @smart_inference_mode()
 def run(
-    weights=ROOT / "yolov5n.pt",  # Faster model for Raspberry Pi
+    weights=ROOT / "yolov5n.pt",
     source=0,
-    imgsz=(256, 256),  # Lower resolution for speed
+    imgsz=(224, 224),   # ✅ reduced for faster startup
     conf_thres=0.25,
     iou_thres=0.45,
     device="",
@@ -98,18 +130,29 @@ def run(
 
     source = str(source)
 
-    spoken_objects = {}
-    disappearance_frames = 20
+    print("Opening camera...")
+
     last_navigation_message = None
+    last_navigation_time = 0
+    last_detected_objects = set()
+
+    system_started = False
 
     device = select_device(device)
-
     model = DetectMultiBackend(weights, device=device)
 
     stride, names, pt = model.stride, model.names, model.pt
     imgsz = check_img_size(imgsz, s=stride)
 
-    dataset = LoadStreams(source, img_size=imgsz, stride=stride, vid_stride=2)
+    # ✅ FAST CAMERA LOAD (IMPORTANT FIX)
+    dataset = LoadStreams(
+        source,
+        img_size=imgsz,
+        stride=stride,
+        vid_stride=2,
+    )
+
+    print("Camera initialized")
 
     model.warmup(imgsz=(1, 3, *imgsz))
 
@@ -121,16 +164,19 @@ def run(
 
     for path, im, im0s, vid_cap, s in dataset:
 
+        # ✅ START SOUND ONLY WHEN FRAME ARRIVES
+        if not system_started:
+            speak("System started")
+            system_started = True
+
         current_frame_objects = set()
 
         left_obstacle = False
         center_obstacle = False
         right_obstacle = False
 
-        # ================= PREPROCESS =================
-
+        # PREPROCESS
         with dt[0]:
-
             im = torch.from_numpy(im).to(model.device)
             im = im.float()
             im /= 255
@@ -138,27 +184,21 @@ def run(
             if len(im.shape) == 3:
                 im = im[None]
 
-        # ================= INFERENCE =================
-
+        # INFERENCE
         with dt[1]:
             pred = model(im)
 
-        # ================= NMS =================
-
+        # NMS
         with dt[2]:
             pred = non_max_suppression(pred, conf_thres, iou_thres)
 
         for i, det in enumerate(pred):
 
             im0 = im0s[i].copy()
-
             annotator = Annotator(im0, line_width=3, example=str(names))
 
             if len(det):
-
-                det[:, :4] = scale_boxes(
-                    im.shape[2:], det[:, :4], im0.shape
-                ).round()
+                det[:, :4] = scale_boxes(im.shape[2:], det[:, :4], im0.shape).round()
 
                 for *xyxy, conf, cls in reversed(det):
 
@@ -166,10 +206,7 @@ def run(
                     object_name = names[c]
 
                     x1, y1, x2, y2 = map(int, xyxy)
-
-                    width = x2 - x1
-                    height = y2 - y1
-                    area = width * height
+                    area = (x2 - x1) * (y2 - y1)
 
                     if area < CLOSE_OBJECT_AREA:
                         continue
@@ -180,72 +217,53 @@ def run(
                     if center_x < frame_width / 3:
                         position = "on your left"
                         left_obstacle = True
-
                     elif center_x < 2 * frame_width / 3:
                         position = "in front of you"
                         center_obstacle = True
-
                     else:
                         position = "on your right"
                         right_obstacle = True
 
                     speech_text = f"{object_name} {position}"
-
                     current_frame_objects.add(speech_text)
 
-                    if speech_text not in spoken_objects:
+                    if speech_text not in last_detected_objects:
+                        speak(speech_text)
 
-                        print("Speaking:", speech_text)
-
-                        speech_queue.put(speech_text)
-
-                        spoken_objects[speech_text] = 0
-
-                    label = f"{object_name} {position} {conf:.2f}"
-
-                    annotator.box_label(xyxy, label, color=colors(c, True))
+                    annotator.box_label(
+                        xyxy,
+                        f"{object_name} {position} {conf:.2f}",
+                        color=colors(c, True),
+                    )
 
             im0 = annotator.result()
 
-            # ================= SMART NAVIGATION =================
-
+            # NAVIGATION
             navigation_message = None
 
             if not center_obstacle:
                 navigation_message = "Path clear ahead"
-
             elif center_obstacle and not left_obstacle:
                 navigation_message = "Obstacle ahead move left"
-
             elif center_obstacle and not right_obstacle:
                 navigation_message = "Obstacle ahead move right"
-
             else:
                 navigation_message = "Obstacle on both sides move carefully"
 
-            if navigation_message != last_navigation_message:
+            current_time = time.time()
 
-                print("Navigation:", navigation_message)
-
-                speech_queue.put(navigation_message)
-
+            if (
+                navigation_message != last_navigation_message
+                and current_time - last_navigation_time > NAV_COOLDOWN
+            ):
+                speak(navigation_message)
                 last_navigation_message = navigation_message
+                last_navigation_time = current_time
 
-            # ================= CLEAN MEMORY =================
+            last_detected_objects = current_frame_objects.copy()
 
-            for obj in list(spoken_objects.keys()):
-
-                if obj not in current_frame_objects:
-
-                    spoken_objects[obj] += 1
-
-                    if spoken_objects[obj] > disappearance_frames:
-                        del spoken_objects[obj]
-
-            # ================= DISPLAY WINDOW =================
-
+            # DISPLAY
             if view_img:
-
                 cv2.imshow("Detection", im0)
 
                 if cv2.waitKey(1) & 0xFF == ord("q"):
@@ -258,26 +276,23 @@ def run(
 # ===================== CLI =====================
 
 def parse_opt():
-
     parser = argparse.ArgumentParser()
-
     parser.add_argument("--weights", type=str, default="yolov5n.pt")
     parser.add_argument("--source", type=str, default="0")
-
     opt = parser.parse_args()
-
     print_args(vars(opt))
-
     return opt
 
 
 def main(opt):
-
-    run(**vars(opt))
+    try:
+        run(**vars(opt))
+    except KeyboardInterrupt:
+        print("Stopped by user")
+    finally:
+        speak_blocking("System stopped")   # ✅ STOP SOUND
 
 
 if __name__ == "__main__":
-
     opt = parse_opt()
-
     main(opt)
