@@ -1,22 +1,17 @@
 # ===================== TEXT TO SPEECH =====================
-import pyttsx3
-import time
-import asyncio
-import edge_tts
-import pygame
-import tempfile
-
 # =========================================================
-
 # Ultralytics 🚀 AGPL-3.0 License
 import argparse
+import asyncio
 import os
 import platform
 import sys
+import tempfile
 from pathlib import Path
-import threading
-from queue import Queue
 
+import edge_tts
+import pygame
+import pyttsx3
 import torch
 
 FILE = Path(__file__).resolve()
@@ -26,6 +21,7 @@ if str(ROOT) not in sys.path:
 ROOT = Path(os.path.relpath(ROOT, Path.cwd()))
 
 pygame.mixer.init()
+
 
 async def speak_async(text):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f:
@@ -42,6 +38,7 @@ async def speak_async(text):
 
 
 from ultralytics.utils.plotting import Annotator, colors
+
 from models.common import DetectMultiBackend
 from utils.dataloaders import IMG_FORMATS, VID_FORMATS, LoadImages, LoadScreenshots, LoadStreams
 from utils.general import (
@@ -51,7 +48,6 @@ from utils.general import (
     check_img_size,
     check_imshow,
     check_requirements,
-    colorstr,
     cv2,
     increment_path,
     non_max_suppression,
@@ -134,7 +130,6 @@ def run(
     model.warmup(imgsz=(1 if pt or model.triton else bs, 3, *imgsz))
     seen, windows, dt = 0, [], (Profile(device=device), Profile(device=device), Profile(device=device))
 
-
     for path, im, im0s, vid_cap, s in dataset:
         current_frame_objects = set()
         with dt[0]:
@@ -153,9 +148,9 @@ def run(
         for i, det in enumerate(pred):
             seen += 1
             if webcam:
-                p, im0, frame = path[i], im0s[i].copy(), dataset.count
+                p, im0, _frame = path[i], im0s[i].copy(), dataset.count
             else:
-                p, im0, frame = path, im0s.copy(), getattr(dataset, "frame", 0)
+                p, im0, _frame = path, im0s.copy(), getattr(dataset, "frame", 0)
 
             p = Path(p)
             save_path = str(save_dir / p.name)
@@ -168,13 +163,13 @@ def run(
                     c = int(cls)
                     object_name = names[c]
 
-                    # Get frame width 
+                    # Get frame width
                     frame_width = im0.shape[1]
 
-                    # Get object center position 
+                    # Get object center position
                     center_x = (xyxy[0] + xyxy[2]) / 2
 
-                    # Determine the psoition 
+                    # Determine the psoition
                     if center_x < frame_width / 3:
                         position = "on your left"
                     elif center_x < 2 * frame_width / 3:
@@ -201,8 +196,6 @@ def run(
 
                     label = None if hide_labels else f"{object_name} {position} {conf:.2f}"
                     annotator.box_label(xyxy, label, color=colors(c, True))
-
-                
 
             im0 = annotator.result()
             # Update spoken memory after frame
