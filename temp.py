@@ -86,7 +86,8 @@ def speak(text):
     speech_queue.put(text)
 
 
-# ✅ BLOCKING SPEECH (FOR STOP ONLY)
+# ===================== BLOCKING SPEECH =====================
+
 def speak_blocking(text):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -120,7 +121,7 @@ CLOSE_OBJECT_AREA = 20000
 def run(
     weights=ROOT / "yolov5n.pt",
     source=0,
-    imgsz=(256, 256),
+    imgsz=(224, 224),   # ✅ reduced for faster startup
     conf_thres=0.25,
     iou_thres=0.45,
     device="",
@@ -129,11 +130,13 @@ def run(
 
     source = str(source)
 
+    print("Opening camera...")
+
     last_navigation_message = None
     last_navigation_time = 0
     last_detected_objects = set()
 
-    system_started = False   # ✅ NEW FLAG
+    system_started = False
 
     device = select_device(device)
     model = DetectMultiBackend(weights, device=device)
@@ -141,7 +144,15 @@ def run(
     stride, names, pt = model.stride, model.names, model.pt
     imgsz = check_img_size(imgsz, s=stride)
 
-    dataset = LoadStreams(source, img_size=imgsz, stride=stride, vid_stride=2)
+    # ✅ FAST CAMERA LOAD (IMPORTANT FIX)
+    dataset = LoadStreams(
+        source,
+        img_size=imgsz,
+        stride=stride,
+        vid_stride=2,
+    )
+
+    print("Camera initialized")
 
     model.warmup(imgsz=(1, 3, *imgsz))
 
@@ -153,7 +164,7 @@ def run(
 
     for path, im, im0s, vid_cap, s in dataset:
 
-        # ✅ TRIGGER START ONLY ON FIRST FRAME
+        # ✅ START SOUND ONLY WHEN FRAME ARRIVES
         if not system_started:
             speak("System started")
             system_started = True
@@ -164,16 +175,20 @@ def run(
         center_obstacle = False
         right_obstacle = False
 
+        # PREPROCESS
         with dt[0]:
             im = torch.from_numpy(im).to(model.device)
             im = im.float()
             im /= 255
+
             if len(im.shape) == 3:
                 im = im[None]
 
+        # INFERENCE
         with dt[1]:
             pred = model(im)
 
+        # NMS
         with dt[2]:
             pred = non_max_suppression(pred, conf_thres, iou_thres)
 
@@ -223,6 +238,7 @@ def run(
 
             im0 = annotator.result()
 
+            # NAVIGATION
             navigation_message = None
 
             if not center_obstacle:
@@ -246,6 +262,7 @@ def run(
 
             last_detected_objects = current_frame_objects.copy()
 
+            # DISPLAY
             if view_img:
                 cv2.imshow("Detection", im0)
 

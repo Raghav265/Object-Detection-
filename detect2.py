@@ -1,70 +1,17 @@
-# ===================== TEXT TO SPEECH =====================
-import asyncio
-import edge_tts
-import pygame
-import tempfile
+# ===================== FAST OFFLINE SPEECH =====================
+import pyttsx3
 import threading
-from queue import Queue
 import time
-# =========================================================
 
-import argparse
-import os
-import sys
-from pathlib import Path
-import torch
-import cv2
+engine = pyttsx3.init()
+engine.setProperty('rate', 170)
+engine.setProperty('volume', 1.0)
 
-FILE = Path(__file__).resolve()
-ROOT = FILE.parents[0]
-
-if str(ROOT) not in sys.path:
-    sys.path.append(str(ROOT))
-
-ROOT = Path(os.path.relpath(ROOT, Path.cwd()))
-
-pygame.mixer.init()
-
-# ===================== SPEECH CONTROL =====================
-
-speech_queue = Queue(maxsize=3)
+speech_lock = threading.Lock()
 last_spoken_time = {}
 
 SPEAK_COOLDOWN = 2
 NAV_COOLDOWN = 2
-
-
-async def speak_async(text):
-    try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f:
-            filename = f.name
-
-        communicate = edge_tts.Communicate(text, voice="en-US-AriaNeural")
-        await communicate.save(filename)
-
-        pygame.mixer.music.load(filename)
-        pygame.mixer.music.play()
-
-        while pygame.mixer.music.get_busy():
-            await asyncio.sleep(0.05)
-
-    except Exception as e:
-        print("TTS Error:", e)
-
-
-def speech_worker():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-
-    while True:
-        text = speech_queue.get()
-        if text is None:
-            break
-
-        loop.run_until_complete(speak_async(text))
-
-
-threading.Thread(target=speech_worker, daemon=True).start()
 
 
 def speak(text):
@@ -76,25 +23,35 @@ def speak(text):
 
     last_spoken_time[text] = current_time
 
-    if speech_queue.full():
-        try:
-            speech_queue.get_nowait()
-        except:
-            pass
+    def run():
+        with speech_lock:
+            print("Speaking:", text)
+            engine.say(text)
+            engine.runAndWait()
 
-    print("Speaking:", text)
-    speech_queue.put(text)
+    threading.Thread(target=run, daemon=True).start()
 
 
-# ✅ BLOCKING SPEECH (FOR STOP ONLY)
 def speak_blocking(text):
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(speak_async(text))
+    engine.say(text)
+    engine.runAndWait()
+
+
+# ===================== IMPORTS =====================
+import argparse
+import sys
+from pathlib import Path
+import torch
+import cv2
+
+FILE = Path(__file__).resolve()
+ROOT = FILE.parents[0]
+
+if str(ROOT) not in sys.path:
+    sys.path.append(str(ROOT))
 
 
 # ===================== YOLO IMPORTS =====================
-
 from ultralytics.utils.plotting import Annotator, colors
 from models.common import DetectMultiBackend
 from utils.dataloaders import LoadStreams
@@ -110,30 +67,27 @@ from utils.torch_utils import select_device, smart_inference_mode
 
 
 # ===================== DISTANCE FILTER =====================
-
 CLOSE_OBJECT_AREA = 20000
 
 
 # ===================== MAIN RUN =====================
-
 @smart_inference_mode()
 def run(
     weights=ROOT / "yolov5n.pt",
     source=0,
-    imgsz=(256, 256),
+    imgsz=(224, 224),   # optimized for Pi
     conf_thres=0.25,
     iou_thres=0.45,
     device="",
     view_img=True,
 ):
 
-    source = str(source)
+    print("Opening camera...")
 
     last_navigation_message = None
     last_navigation_time = 0
     last_detected_objects = set()
-
-    system_started = False   # ✅ NEW FLAG
+    system_started = False
 
     device = select_device(device)
     model = DetectMultiBackend(weights, device=device)
@@ -142,6 +96,8 @@ def run(
     imgsz = check_img_size(imgsz, s=stride)
 
     dataset = LoadStreams(source, img_size=imgsz, stride=stride, vid_stride=2)
+
+    print("Camera initialized")
 
     model.warmup(imgsz=(1, 3, *imgsz))
 
@@ -153,7 +109,7 @@ def run(
 
     for path, im, im0s, vid_cap, s in dataset:
 
-        # ✅ TRIGGER START ONLY ON FIRST FRAME
+        # ✅ START SOUND
         if not system_started:
             speak("System started")
             system_started = True
@@ -164,16 +120,20 @@ def run(
         center_obstacle = False
         right_obstacle = False
 
+        # PREPROCESS
         with dt[0]:
             im = torch.from_numpy(im).to(model.device)
             im = im.float()
             im /= 255
+
             if len(im.shape) == 3:
                 im = im[None]
 
+        # INFERENCE
         with dt[1]:
             pred = model(im)
 
+        # NMS
         with dt[2]:
             pred = non_max_suppression(pred, conf_thres, iou_thres)
 
@@ -193,6 +153,7 @@ def run(
                     x1, y1, x2, y2 = map(int, xyxy)
                     area = (x2 - x1) * (y2 - y1)
 
+                    # Ignore far objects
                     if area < CLOSE_OBJECT_AREA:
                         continue
 
@@ -223,6 +184,7 @@ def run(
 
             im0 = annotator.result()
 
+            # ================= NAVIGATION =================
             navigation_message = None
 
             if not center_obstacle:
@@ -246,6 +208,7 @@ def run(
 
             last_detected_objects = current_frame_objects.copy()
 
+            # ================= DISPLAY =================
             if view_img:
                 cv2.imshow("Detection", im0)
 
@@ -257,7 +220,6 @@ def run(
 
 
 # ===================== CLI =====================
-
 def parse_opt():
     parser = argparse.ArgumentParser()
     parser.add_argument("--weights", type=str, default="yolov5n.pt")
@@ -273,7 +235,7 @@ def main(opt):
     except KeyboardInterrupt:
         print("Stopped by user")
     finally:
-        speak_blocking("System stopped")   # ✅ STOP SOUND
+        speak_blocking("System stopped")
 
 
 if __name__ == "__main__":

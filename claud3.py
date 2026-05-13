@@ -4,7 +4,7 @@ import edge_tts
 import pygame
 import tempfile
 import threading
-from queue import Queue
+from queue import Queue, Empty
 import time
 # =========================================================
 
@@ -28,10 +28,13 @@ pygame.mixer.init()
 # ===================== SPEECH CONTROL =====================
 
 speech_queue = Queue(maxsize=3)
-last_spoken_time = {}
 
-SPEAK_COOLDOWN = 2
-NAV_COOLDOWN = 2
+# Per-object cooldown (time-based, not set-based)
+last_spoken_time = {}
+SPEAK_COOLDOWN = 3       # seconds between same object announcement
+NAV_COOLDOWN = 2         # seconds between navigation messages
+PRUNE_INTERVAL = 30      # seconds between pruning last_spoken_time dict
+last_prune_time = time.time()
 
 
 async def speak_async(text):
@@ -48,6 +51,12 @@ async def speak_async(text):
         while pygame.mixer.music.get_busy():
             await asyncio.sleep(0.05)
 
+        # Clean up temp file after playing
+        try:
+            os.unlink(filename)
+        except Exception:
+            pass
+
     except Exception as e:
         print("TTS Error:", e)
 
@@ -60,34 +69,47 @@ def speech_worker():
         text = speech_queue.get()
         if text is None:
             break
-
         loop.run_until_complete(speak_async(text))
 
 
 threading.Thread(target=speech_worker, daemon=True).start()
 
 
+def prune_last_spoken():
+    """Remove old entries from last_spoken_time to prevent memory leak."""
+    global last_prune_time
+    current_time = time.time()
+    if current_time - last_prune_time > PRUNE_INTERVAL:
+        cutoff = current_time - SPEAK_COOLDOWN * 10
+        keys_to_delete = [k for k, v in last_spoken_time.items() if v < cutoff]
+        for k in keys_to_delete:
+            del last_spoken_time[k]
+        last_prune_time = current_time
+
+
 def speak(text):
     current_time = time.time()
 
+    # Cooldown check per unique speech text
     if text in last_spoken_time:
         if current_time - last_spoken_time[text] < SPEAK_COOLDOWN:
             return
 
     last_spoken_time[text] = current_time
 
+    # Drop oldest item if queue is full to keep speech fresh
     if speech_queue.full():
         try:
             speech_queue.get_nowait()
-        except:
+        except Empty:
             pass
 
     print("Speaking:", text)
     speech_queue.put(text)
 
 
-# ✅ BLOCKING SPEECH (FOR STOP ONLY)
 def speak_blocking(text):
+    """Blocking speech — used only for shutdown message."""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.run_until_complete(speak_async(text))
@@ -111,7 +133,7 @@ from utils.torch_utils import select_device, smart_inference_mode
 
 # ===================== DISTANCE FILTER =====================
 
-CLOSE_OBJECT_AREA = 20000
+CLOSE_OBJECT_AREA = 20000   # Ignore objects smaller than this (pixels²)
 
 
 # ===================== MAIN RUN =====================
@@ -119,21 +141,17 @@ CLOSE_OBJECT_AREA = 20000
 @smart_inference_mode()
 def run(
     weights=ROOT / "yolov5n.pt",
-    source=0,
-    imgsz=(256, 256),
-    conf_thres=0.25,
+    source="0",
+    imgsz=(320, 320),       # Reduced from 256 for better accuracy, still fast on Pi
+    conf_thres=0.30,        # Slightly higher threshold reduces false positives on Pi
     iou_thres=0.45,
-    device="",
+    device="cpu",           # Raspberry Pi has no CUDA GPU
     view_img=True,
 ):
-
-    source = str(source)
-
     last_navigation_message = None
     last_navigation_time = 0
-    last_detected_objects = set()
 
-    system_started = False   # ✅ NEW FLAG
+    system_started = False
 
     device = select_device(device)
     model = DetectMultiBackend(weights, device=device)
@@ -141,7 +159,8 @@ def run(
     stride, names, pt = model.stride, model.names, model.pt
     imgsz = check_img_size(imgsz, s=stride)
 
-    dataset = LoadStreams(source, img_size=imgsz, stride=stride, vid_stride=2)
+    # vid_stride=3 skips frames to reduce CPU load on Pi
+    dataset = LoadStreams(source, img_size=imgsz, stride=stride, vid_stride=3)
 
     model.warmup(imgsz=(1, 3, *imgsz))
 
@@ -153,12 +172,13 @@ def run(
 
     for path, im, im0s, vid_cap, s in dataset:
 
-        # ✅ TRIGGER START ONLY ON FIRST FRAME
+        # Announce system start on first frame only
         if not system_started:
             speak("System started")
             system_started = True
 
-        current_frame_objects = set()
+        # Prune memory periodically
+        prune_last_spoken()
 
         left_obstacle = False
         center_obstacle = False
@@ -180,7 +200,7 @@ def run(
         for i, det in enumerate(pred):
 
             im0 = im0s[i].copy()
-            annotator = Annotator(im0, line_width=3, example=str(names))
+            annotator = Annotator(im0, line_width=2, example=str(names))
 
             if len(det):
                 det[:, :4] = scale_boxes(im.shape[2:], det[:, :4], im0.shape).round()
@@ -193,6 +213,7 @@ def run(
                     x1, y1, x2, y2 = map(int, xyxy)
                     area = (x2 - x1) * (y2 - y1)
 
+                    # Skip distant/small objects
                     if area < CLOSE_OBJECT_AREA:
                         continue
 
@@ -210,10 +231,7 @@ def run(
                         right_obstacle = True
 
                     speech_text = f"{object_name} {position}"
-                    current_frame_objects.add(speech_text)
-
-                    if speech_text not in last_detected_objects:
-                        speak(speech_text)
+                    speak(speech_text)   # speak() handles cooldown internally
 
                     annotator.box_label(
                         xyxy,
@@ -223,28 +241,27 @@ def run(
 
             im0 = annotator.result()
 
-            navigation_message = None
+            # ---- Navigation guidance ----
+            current_time = time.time()
 
             if not center_obstacle:
                 navigation_message = "Path clear ahead"
-            elif center_obstacle and not left_obstacle:
-                navigation_message = "Obstacle ahead move left"
-            elif center_obstacle and not right_obstacle:
-                navigation_message = "Obstacle ahead move right"
+            elif not left_obstacle and not right_obstacle:
+                navigation_message = "Obstacle ahead, move left or right"
+            elif not left_obstacle:
+                navigation_message = "Obstacle ahead, move left"
+            elif not right_obstacle:
+                navigation_message = "Obstacle ahead, move right"
             else:
-                navigation_message = "Obstacle on both sides move carefully"
-
-            current_time = time.time()
+                navigation_message = "Obstacles on all sides, move carefully"
 
             if (
                 navigation_message != last_navigation_message
-                and current_time - last_navigation_time > NAV_COOLDOWN
-            ):
+                or current_time - last_navigation_time > NAV_COOLDOWN * 5
+            ) and current_time - last_navigation_time > NAV_COOLDOWN:
                 speak(navigation_message)
                 last_navigation_message = navigation_message
                 last_navigation_time = current_time
-
-            last_detected_objects = current_frame_objects.copy()
 
             if view_img:
                 cv2.imshow("Detection", im0)
@@ -260,20 +277,33 @@ def run(
 
 def parse_opt():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--weights", type=str, default="yolov5n.pt")
-    parser.add_argument("--source", type=str, default="0")
+    parser.add_argument("--weights", type=str, default="yolov5n.pt",
+                        help="Path to model weights")
+    parser.add_argument("--source", type=str, default="0",
+                        help="Camera index or video path")
+    parser.add_argument("--no-view", action="store_true",
+                        help="Disable display window (useful for headless Pi)")
     opt = parser.parse_args()
     print_args(vars(opt))
     return opt
 
 
 def main(opt):
+    # Allow --no-view flag to disable window on headless Pi
+    view_img = not opt.no_view
     try:
-        run(**vars(opt))
+        run(weights=opt.weights, source=opt.source, view_img=view_img)
     except KeyboardInterrupt:
-        print("Stopped by user")
+        print("\nStopped by user")
     finally:
-        speak_blocking("System stopped")   # ✅ STOP SOUND
+        # Clear queue then speak stop message
+        while not speech_queue.empty():
+            try:
+                speech_queue.get_nowait()
+            except Empty:
+                break
+        speak_blocking("System stopped")
+        pygame.mixer.quit()
 
 
 if __name__ == "__main__":
