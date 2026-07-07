@@ -1,19 +1,19 @@
 # ===================== TEXT TO SPEECH =====================
-import asyncio
-import edge_tts
-import pygame
-import tempfile
-import threading
-from queue import Queue, Empty
-import time
 # =========================================================
-
 import argparse
+import asyncio
 import os
 import sys
+import tempfile
+import threading
+import time
 from pathlib import Path
-import torch
+from queue import Empty, Queue
+
 import cv2
+import edge_tts
+import pygame
+import torch
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]
@@ -31,9 +31,9 @@ speech_queue = Queue(maxsize=3)
 
 # Per-object cooldown (time-based, not set-based)
 last_spoken_time = {}
-SPEAK_COOLDOWN = 3       # seconds between same object announcement
-NAV_COOLDOWN = 2         # seconds between navigation messages
-PRUNE_INTERVAL = 30      # seconds between pruning last_spoken_time dict
+SPEAK_COOLDOWN = 3  # seconds between same object announcement
+NAV_COOLDOWN = 2  # seconds between navigation messages
+PRUNE_INTERVAL = 30  # seconds between pruning last_spoken_time dict
 last_prune_time = time.time()
 
 
@@ -118,6 +118,7 @@ def speak_blocking(text):
 # ===================== YOLO IMPORTS =====================
 
 from ultralytics.utils.plotting import Annotator, colors
+
 from models.common import DetectMultiBackend
 from utils.dataloaders import LoadStreams
 from utils.general import (
@@ -130,22 +131,22 @@ from utils.general import (
 )
 from utils.torch_utils import select_device, smart_inference_mode
 
-
 # ===================== DISTANCE FILTER =====================
 
-CLOSE_OBJECT_AREA = 20000   # Ignore objects smaller than this (pixels²)
+CLOSE_OBJECT_AREA = 20000  # Ignore objects smaller than this (pixels²)
 
 
 # ===================== MAIN RUN =====================
+
 
 @smart_inference_mode()
 def run(
     weights=ROOT / "yolov5n.pt",
     source="0",
-    imgsz=(320, 320),       # Reduced from 256 for better accuracy, still fast on Pi
-    conf_thres=0.30,        # Slightly higher threshold reduces false positives on Pi
+    imgsz=(320, 320),  # Reduced from 256 for better accuracy, still fast on Pi
+    conf_thres=0.30,  # Slightly higher threshold reduces false positives on Pi
     iou_thres=0.45,
-    device="cpu",           # Raspberry Pi has no CUDA GPU
+    device="cpu",  # Raspberry Pi has no CUDA GPU
     view_img=True,
 ):
     last_navigation_message = None
@@ -156,7 +157,7 @@ def run(
     device = select_device(device)
     model = DetectMultiBackend(weights, device=device)
 
-    stride, names, pt = model.stride, model.names, model.pt
+    stride, names, _pt = model.stride, model.names, model.pt
     imgsz = check_img_size(imgsz, s=stride)
 
     # vid_stride=3 skips frames to reduce CPU load on Pi
@@ -164,14 +165,17 @@ def run(
 
     model.warmup(imgsz=(1, 3, *imgsz))
 
-    seen, windows, dt = 0, [], (
-        Profile(device=device),
-        Profile(device=device),
-        Profile(device=device),
+    _seen, _windows, dt = (
+        0,
+        [],
+        (
+            Profile(device=device),
+            Profile(device=device),
+            Profile(device=device),
+        ),
     )
 
     for path, im, im0s, vid_cap, s in dataset:
-
         # Announce system start on first frame only
         if not system_started:
             speak("System started")
@@ -198,7 +202,6 @@ def run(
             pred = non_max_suppression(pred, conf_thres, iou_thres)
 
         for i, det in enumerate(pred):
-
             im0 = im0s[i].copy()
             annotator = Annotator(im0, line_width=2, example=str(names))
 
@@ -206,7 +209,6 @@ def run(
                 det[:, :4] = scale_boxes(im.shape[2:], det[:, :4], im0.shape).round()
 
                 for *xyxy, conf, cls in reversed(det):
-
                     c = int(cls)
                     object_name = names[c]
 
@@ -231,7 +233,7 @@ def run(
                         right_obstacle = True
 
                     speech_text = f"{object_name} {position}"
-                    speak(speech_text)   # speak() handles cooldown internally
+                    speak(speech_text)  # speak() handles cooldown internally
 
                     annotator.box_label(
                         xyxy,
@@ -256,8 +258,7 @@ def run(
                 navigation_message = "Obstacles on all sides, move carefully"
 
             if (
-                navigation_message != last_navigation_message
-                or current_time - last_navigation_time > NAV_COOLDOWN * 5
+                navigation_message != last_navigation_message or current_time - last_navigation_time > NAV_COOLDOWN * 5
             ) and current_time - last_navigation_time > NAV_COOLDOWN:
                 speak(navigation_message)
                 last_navigation_message = navigation_message
@@ -275,14 +276,12 @@ def run(
 
 # ===================== CLI =====================
 
+
 def parse_opt():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--weights", type=str, default="yolov5n.pt",
-                        help="Path to model weights")
-    parser.add_argument("--source", type=str, default="0",
-                        help="Camera index or video path")
-    parser.add_argument("--no-view", action="store_true",
-                        help="Disable display window (useful for headless Pi)")
+    parser.add_argument("--weights", type=str, default="yolov5n.pt", help="Path to model weights")
+    parser.add_argument("--source", type=str, default="0", help="Camera index or video path")
+    parser.add_argument("--no-view", action="store_true", help="Disable display window (useful for headless Pi)")
     opt = parser.parse_args()
     print_args(vars(opt))
     return opt
