@@ -1,16 +1,14 @@
 # ===================== ADDED FOR VOICE =====================
-import pyttsx3
-import time
 # ==========================================================
-
 # Ultralytics 🚀 AGPL-3.0 License
 import argparse
-import csv
 import os
 import platform
 import sys
+import time
 from pathlib import Path
 
+import pyttsx3
 import torch
 
 FILE = Path(__file__).resolve()
@@ -19,7 +17,8 @@ if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
 ROOT = Path(os.path.relpath(ROOT, Path.cwd()))
 
-from ultralytics.utils.plotting import Annotator, colors, save_one_box
+from ultralytics.utils.plotting import Annotator, colors
+
 from models.common import DetectMultiBackend
 from utils.dataloaders import IMG_FORMATS, VID_FORMATS, LoadImages, LoadScreenshots, LoadStreams
 from utils.general import (
@@ -29,14 +28,12 @@ from utils.general import (
     check_img_size,
     check_imshow,
     check_requirements,
-    colorstr,
     cv2,
     increment_path,
     non_max_suppression,
     print_args,
     scale_boxes,
     strip_optimizer,
-    xyxy2xywh,
 )
 from utils.torch_utils import select_device, smart_inference_mode
 
@@ -131,9 +128,9 @@ def run(
         for i, det in enumerate(pred):
             seen += 1
             if webcam:
-                p, im0, frame = path[i], im0s[i].copy(), dataset.count
+                p, im0, _frame = path[i], im0s[i].copy(), dataset.count
             else:
-                p, im0, frame = path, im0s.copy(), getattr(dataset, "frame", 0)
+                p, im0, _frame = path, im0s.copy(), getattr(dataset, "frame", 0)
 
             p = Path(p)
             save_path = str(save_dir / p.name)
