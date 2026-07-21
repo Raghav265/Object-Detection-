@@ -1,19 +1,19 @@
 # ===================== TEXT TO SPEECH =====================
-import asyncio
-import edge_tts
-import pygame
-import tempfile
-import threading
-from queue import Queue
-import time
 # =========================================================
-
 import argparse
+import asyncio
 import os
 import sys
+import tempfile
+import threading
+import time
 from pathlib import Path
-import torch
+from queue import Queue
+
 import cv2
+import edge_tts
+import pygame
+import torch
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]
@@ -88,6 +88,7 @@ def speak(text):
 
 # ===================== BLOCKING SPEECH =====================
 
+
 def speak_blocking(text):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -97,6 +98,7 @@ def speak_blocking(text):
 # ===================== YOLO IMPORTS =====================
 
 from ultralytics.utils.plotting import Annotator, colors
+
 from models.common import DetectMultiBackend
 from utils.dataloaders import LoadStreams
 from utils.general import (
@@ -109,7 +111,6 @@ from utils.general import (
 )
 from utils.torch_utils import select_device, smart_inference_mode
 
-
 # ===================== DISTANCE FILTER =====================
 
 CLOSE_OBJECT_AREA = 20000
@@ -117,11 +118,12 @@ CLOSE_OBJECT_AREA = 20000
 
 # ===================== MAIN RUN =====================
 
+
 @smart_inference_mode()
 def run(
     weights=ROOT / "yolov5n.pt",
     source=0,
-    imgsz=(224, 224),   # ✅ reduced for faster startup
+    imgsz=(224, 224),  # ✅ reduced for faster startup
     conf_thres=0.25,
     iou_thres=0.45,
     device="",
@@ -141,7 +143,7 @@ def run(
     device = select_device(device)
     model = DetectMultiBackend(weights, device=device)
 
-    stride, names, pt = model.stride, model.names, model.pt
+    stride, names, _pt = model.stride, model.names, model.pt
     imgsz = check_img_size(imgsz, s=stride)
 
     # ✅ FAST CAMERA LOAD (IMPORTANT FIX)
@@ -156,14 +158,17 @@ def run(
 
     model.warmup(imgsz=(1, 3, *imgsz))
 
-    seen, windows, dt = 0, [], (
-        Profile(device=device),
-        Profile(device=device),
-        Profile(device=device),
+    _seen, _windows, dt = (
+        0,
+        [],
+        (
+            Profile(device=device),
+            Profile(device=device),
+            Profile(device=device),
+        ),
     )
 
     for path, im, im0s, vid_cap, s in dataset:
-
         # ✅ START SOUND ONLY WHEN FRAME ARRIVES
         if not system_started:
             speak("System started")
@@ -193,7 +198,6 @@ def run(
             pred = non_max_suppression(pred, conf_thres, iou_thres)
 
         for i, det in enumerate(pred):
-
             im0 = im0s[i].copy()
             annotator = Annotator(im0, line_width=3, example=str(names))
 
@@ -201,7 +205,6 @@ def run(
                 det[:, :4] = scale_boxes(im.shape[2:], det[:, :4], im0.shape).round()
 
                 for *xyxy, conf, cls in reversed(det):
-
                     c = int(cls)
                     object_name = names[c]
 
@@ -252,10 +255,7 @@ def run(
 
             current_time = time.time()
 
-            if (
-                navigation_message != last_navigation_message
-                and current_time - last_navigation_time > NAV_COOLDOWN
-            ):
+            if navigation_message != last_navigation_message and current_time - last_navigation_time > NAV_COOLDOWN:
                 speak(navigation_message)
                 last_navigation_message = navigation_message
                 last_navigation_time = current_time
@@ -275,6 +275,7 @@ def run(
 
 # ===================== CLI =====================
 
+
 def parse_opt():
     parser = argparse.ArgumentParser()
     parser.add_argument("--weights", type=str, default="yolov5n.pt")
@@ -290,7 +291,7 @@ def main(opt):
     except KeyboardInterrupt:
         print("Stopped by user")
     finally:
-        speak_blocking("System stopped")   # ✅ STOP SOUND
+        speak_blocking("System stopped")  # ✅ STOP SOUND
 
 
 if __name__ == "__main__":

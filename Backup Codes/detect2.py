@@ -1,11 +1,12 @@
 # ===================== FAST OFFLINE SPEECH =====================
-import pyttsx3
 import threading
 import time
 
+import pyttsx3
+
 engine = pyttsx3.init()
-engine.setProperty('rate', 170)
-engine.setProperty('volume', 1.0)
+engine.setProperty("rate", 170)
+engine.setProperty("volume", 1.0)
 
 speech_lock = threading.Lock()
 last_spoken_time = {}
@@ -41,8 +42,9 @@ def speak_blocking(text):
 import argparse
 import sys
 from pathlib import Path
-import torch
+
 import cv2
+import torch
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]
@@ -53,6 +55,7 @@ if str(ROOT) not in sys.path:
 
 # ===================== YOLO IMPORTS =====================
 from ultralytics.utils.plotting import Annotator, colors
+
 from models.common import DetectMultiBackend
 from utils.dataloaders import LoadStreams
 from utils.general import (
@@ -65,7 +68,6 @@ from utils.general import (
 )
 from utils.torch_utils import select_device, smart_inference_mode
 
-
 # ===================== DISTANCE FILTER =====================
 CLOSE_OBJECT_AREA = 20000
 
@@ -75,7 +77,7 @@ CLOSE_OBJECT_AREA = 20000
 def run(
     weights=ROOT / "yolov5n.pt",
     source=0,
-    imgsz=(224, 224),   # optimized for Pi
+    imgsz=(224, 224),  # optimized for Pi
     conf_thres=0.25,
     iou_thres=0.45,
     device="",
@@ -92,7 +94,7 @@ def run(
     device = select_device(device)
     model = DetectMultiBackend(weights, device=device)
 
-    stride, names, pt = model.stride, model.names, model.pt
+    stride, names, _pt = model.stride, model.names, model.pt
     imgsz = check_img_size(imgsz, s=stride)
 
     dataset = LoadStreams(source, img_size=imgsz, stride=stride, vid_stride=2)
@@ -101,14 +103,17 @@ def run(
 
     model.warmup(imgsz=(1, 3, *imgsz))
 
-    seen, windows, dt = 0, [], (
-        Profile(device=device),
-        Profile(device=device),
-        Profile(device=device),
+    _seen, _windows, dt = (
+        0,
+        [],
+        (
+            Profile(device=device),
+            Profile(device=device),
+            Profile(device=device),
+        ),
     )
 
     for path, im, im0s, vid_cap, s in dataset:
-
         # ✅ START SOUND
         if not system_started:
             speak("System started")
@@ -138,7 +143,6 @@ def run(
             pred = non_max_suppression(pred, conf_thres, iou_thres)
 
         for i, det in enumerate(pred):
-
             im0 = im0s[i].copy()
             annotator = Annotator(im0, line_width=3, example=str(names))
 
@@ -146,7 +150,6 @@ def run(
                 det[:, :4] = scale_boxes(im.shape[2:], det[:, :4], im0.shape).round()
 
                 for *xyxy, conf, cls in reversed(det):
-
                     c = int(cls)
                     object_name = names[c]
 
@@ -198,10 +201,7 @@ def run(
 
             current_time = time.time()
 
-            if (
-                navigation_message != last_navigation_message
-                and current_time - last_navigation_time > NAV_COOLDOWN
-            ):
+            if navigation_message != last_navigation_message and current_time - last_navigation_time > NAV_COOLDOWN:
                 speak(navigation_message)
                 last_navigation_message = navigation_message
                 last_navigation_time = current_time
