@@ -1,17 +1,17 @@
 # ===================== TEXT TO SPEECH =====================
-import pyttsx3
-import threading
-import queue
-import time
 # =========================================================
-
 import argparse
 import os
 import platform
+import queue
 import sys
+import threading
+import time
 from pathlib import Path
-import torch
+
 import cv2
+import pyttsx3
+import torch
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]
@@ -24,36 +24,33 @@ ROOT = Path(os.path.relpath(ROOT, Path.cwd()))
 
 # ===================== SPEECH ENGINE =====================
 
+
 class SpeechEngine:
-    """
-    Offline TTS using pyttsx3.
-    - Windows : uses SAPI5 (built-in, natural voice, no install needed)
-    - Mac     : uses 'say' command (built-in, no install needed)
-    - Linux   : uses espeak (install: sudo apt install espeak -y)
+    """Offline TTS using pyttsx3. - Windows : uses SAPI5 (built-in, natural voice, no install needed) - Mac : uses 'say'
+    command (built-in, no install needed) - Linux : uses espeak (install: sudo apt install espeak -y).
 
     Two queues:
-      - nav_queue : size 1, navigation messages (highest priority)
-      - obj_queue : size 3, object name announcements
+    - nav_queue : size 1, navigation messages (highest priority)
+    - obj_queue : size 3, object name announcements
 
-    Speech worker always drains nav_queue first so navigation
-    warnings can never be dropped by object announcements.
+    Speech worker always drains nav_queue first so navigation warnings can never be dropped by object announcements.
 
-    Cooldown is tracked per object CLASS (e.g. "person"), not per
-    full phrase, so position changes always get re-announced.
+    Cooldown is tracked per object CLASS (e.g. "person"), not per full phrase, so position changes always get
+    re-announced.
     """
 
-    SPEAK_COOLDOWN = 2      # seconds between same-class object announcements
-    NAV_COOLDOWN   = 2      # seconds between navigation messages
+    SPEAK_COOLDOWN = 2  # seconds between same-class object announcements
+    NAV_COOLDOWN = 2  # seconds between navigation messages
 
     def __init__(self):
         self.nav_queue = queue.Queue(maxsize=1)
         self.obj_queue = queue.Queue(maxsize=3)
 
         # Cooldown tracking — keyed by object class name
-        self.last_spoken_class = {}   # class_name -> last spoken phrase
-        self.last_spoken_time  = {}   # class_name -> timestamp
-        self.last_nav_message  = None
-        self.last_nav_time     = 0
+        self.last_spoken_class = {}  # class_name -> last spoken phrase
+        self.last_spoken_time = {}  # class_name -> timestamp
+        self.last_nav_message = None
+        self.last_nav_time = 0
 
         self._is_windows = platform.system() == "Windows"
 
@@ -106,20 +103,18 @@ class SpeechEngine:
                 pass
 
     def speak_object(self, class_name, phrase):
-        """
-        Announce a detected object.
-        Cooldown is per class_name so position changes always get announced.
+        """Announce a detected object. Cooldown is per class_name so position changes always get announced.
         """
         now = time.time()
         last_phrase = self.last_spoken_class.get(class_name)
-        last_time   = self.last_spoken_time.get(class_name, 0)
+        last_time = self.last_spoken_time.get(class_name, 0)
 
-        position_changed = (last_phrase != phrase)
-        cooldown_passed  = (now - last_time > self.SPEAK_COOLDOWN)
+        position_changed = last_phrase != phrase
+        cooldown_passed = now - last_time > self.SPEAK_COOLDOWN
 
         if position_changed or cooldown_passed:
             self.last_spoken_class[class_name] = phrase
-            self.last_spoken_time[class_name]  = now
+            self.last_spoken_time[class_name] = now
             try:
                 self.obj_queue.put_nowait(phrase)
             except queue.Full:
@@ -131,18 +126,16 @@ class SpeechEngine:
                 self.obj_queue.put_nowait(phrase)
 
     def speak_navigation(self, message):
-        """
-        Announce a navigation message.
-        Only spoken when message changes AND nav cooldown has passed.
-        nav_queue size=1 so stale nav messages are replaced by latest.
+        """Announce a navigation message. Only spoken when message changes AND nav cooldown has passed. nav_queue size=1
+        so stale nav messages are replaced by latest.
         """
         now = time.time()
-        message_changed = (message != self.last_nav_message)
-        cooldown_passed = (now - self.last_nav_time > self.NAV_COOLDOWN)
+        message_changed = message != self.last_nav_message
+        cooldown_passed = now - self.last_nav_time > self.NAV_COOLDOWN
 
         if message_changed and cooldown_passed:
             self.last_nav_message = message
-            self.last_nav_time    = now
+            self.last_nav_time = now
             # Replace any pending nav message — latest is always most relevant
             try:
                 self.nav_queue.get_nowait()
@@ -151,9 +144,7 @@ class SpeechEngine:
             self.nav_queue.put_nowait(message)
 
     def speak_now(self, text):
-        """
-        Speak immediately, bypassing both queues.
-        Used for startup, shutdown, and camera error messages.
+        """Speak immediately, bypassing both queues. Used for startup, shutdown, and camera error messages.
         """
         self._say(text)
 
@@ -161,6 +152,7 @@ class SpeechEngine:
 # ===================== YOLO IMPORTS =====================
 
 from ultralytics.utils.plotting import Annotator, colors
+
 from models.common import DetectMultiBackend
 from utils.dataloaders import LoadStreams
 from utils.general import (
@@ -173,8 +165,8 @@ from utils.general import (
 )
 from utils.torch_utils import select_device, smart_inference_mode
 
-
 # ===================== NAVIGATION LOGIC =====================
+
 
 def get_position(center_x, frame_width):
     """Classify object horizontal position into left / center / right."""
@@ -187,13 +179,11 @@ def get_position(center_x, frame_width):
 
 
 def get_navigation_message(left_obstacle, center_obstacle, right_obstacle):
-    """
-    Return a navigation instruction string based on obstacle positions.
-    Returns None when path is clear — the caller handles the
-    transition-only "path clear" announcement.
+    """Return a navigation instruction string based on obstacle positions. Returns None when path is clear — the caller
+    handles the transition-only "path clear" announcement.
     """
     if not center_obstacle:
-        return None                             # path is clear
+        return None  # path is clear
     elif not left_obstacle:
         return "Obstacle ahead, move left"
     elif not right_obstacle:
@@ -204,24 +194,25 @@ def get_navigation_message(left_obstacle, center_obstacle, right_obstacle):
 
 # ===================== MAIN RUN =====================
 
+
 @smart_inference_mode()
 def run(
     weights="yolov5n.pt",
     source="0",
-    imgsz=(160, 160),       # 160x160 for faster inference on Pi (was 256x256)
+    imgsz=(160, 160),  # 160x160 for faster inference on Pi (was 256x256)
     conf_thres=0.25,
     iou_thres=0.45,
-    min_area=20000,          # ignore objects smaller than this (px²)
+    min_area=20000,  # ignore objects smaller than this (px²)
     device="",
-    display=False,           # headless by default; pass --display for debugging
+    display=False,  # headless by default; pass --display for debugging
 ):
     tts = SpeechEngine()
     tts.speak_now("System started")
 
     device = select_device(device)
-    model  = DetectMultiBackend(weights, device=device)
-    stride, names, pt = model.stride, model.names, model.pt
-    imgsz  = check_img_size(imgsz, s=stride)
+    model = DetectMultiBackend(weights, device=device)
+    stride, names, _pt = model.stride, model.names, model.pt
+    imgsz = check_img_size(imgsz, s=stride)
 
     # Tracks previous frame's path state for transition-only "path clear"
     path_was_clear = True
@@ -239,10 +230,9 @@ def run(
             )
 
             for path, im, im0s, vid_cap, s in dataset:
-
-                left_obstacle   = False
+                left_obstacle = False
                 center_obstacle = False
-                right_obstacle  = False
+                right_obstacle = False
 
                 # ---- preprocess ----
                 with dt[0]:
@@ -261,27 +251,25 @@ def run(
 
                 # ---- process detections ----
                 for i, det in enumerate(pred):
-                    im0       = im0s[i].copy()
+                    im0 = im0s[i].copy()
                     annotator = Annotator(im0, line_width=3, example=str(names))
 
                     if len(det):
-                        det[:, :4] = scale_boxes(
-                            im.shape[2:], det[:, :4], im0.shape
-                        ).round()
+                        det[:, :4] = scale_boxes(im.shape[2:], det[:, :4], im0.shape).round()
 
                         for *xyxy, conf, cls in reversed(det):
-                            c          = int(cls)
+                            c = int(cls)
                             class_name = names[c]
                             x1, y1, x2, y2 = map(int, xyxy)
-                            area       = (x2 - x1) * (y2 - y1)
+                            area = (x2 - x1) * (y2 - y1)
 
                             # Skip objects that are too small / too far
                             if area < min_area:
                                 continue
 
                             frame_width = im0.shape[1]
-                            center_x    = (x1 + x2) / 2
-                            position    = get_position(center_x, frame_width)
+                            center_x = (x1 + x2) / 2
+                            position = get_position(center_x, frame_width)
 
                             # Track which zones have obstacles
                             if position == "on your left":
@@ -303,9 +291,7 @@ def run(
                                 )
 
                     # ---- navigation (transition-only "path clear") ----
-                    nav_msg = get_navigation_message(
-                        left_obstacle, center_obstacle, right_obstacle
-                    )
+                    nav_msg = get_navigation_message(left_obstacle, center_obstacle, right_obstacle)
 
                     if nav_msg is None:
                         # Path is clear this frame
@@ -335,46 +321,27 @@ def run(
         except Exception as e:
             print(f"[ERROR] {e}")
             tts.speak_now("Camera error, restarting")
-            time.sleep(3)       # brief pause before reconnect attempt
-            continue            # restart the camera loop
+            time.sleep(3)  # brief pause before reconnect attempt
+            continue  # restart the camera loop
 
 
 # ===================== CLI =====================
 
+
 def parse_opt():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--weights", type=str, default="yolov5n.pt", help="Model weights file")
+    parser.add_argument("--source", type=str, default="0", help="Camera index or video file path")
     parser.add_argument(
-        "--weights",    type=str,   default="yolov5n.pt",
-        help="Model weights file"
+        "--imgsz", type=int, nargs="+", default=[160, 160], help="Inference image size as two ints: height width"
     )
+    parser.add_argument("--conf-thres", type=float, default=0.25, help="Confidence threshold")
+    parser.add_argument("--iou-thres", type=float, default=0.45, help="NMS IoU threshold")
     parser.add_argument(
-        "--source",     type=str,   default="0",
-        help="Camera index or video file path"
+        "--min-area", type=int, default=20000, help="Minimum bounding box area in px² to announce an object"
     )
-    parser.add_argument(
-        "--imgsz",      type=int,   nargs="+", default=[160, 160],
-        help="Inference image size as two ints: height width"
-    )
-    parser.add_argument(
-        "--conf-thres", type=float, default=0.25,
-        help="Confidence threshold"
-    )
-    parser.add_argument(
-        "--iou-thres",  type=float, default=0.45,
-        help="NMS IoU threshold"
-    )
-    parser.add_argument(
-        "--min-area",   type=int,   default=20000,
-        help="Minimum bounding box area in px² to announce an object"
-    )
-    parser.add_argument(
-        "--device",     type=str,   default="",
-        help="Device: cpu, 0, 1, etc."
-    )
-    parser.add_argument(
-        "--display",    action="store_true",
-        help="Show annotated video window (for debugging only)"
-    )
+    parser.add_argument("--device", type=str, default="", help="Device: cpu, 0, 1, etc.")
+    parser.add_argument("--display", action="store_true", help="Show annotated video window (for debugging only)")
     opt = parser.parse_args()
 
     # Convert imgsz list to tuple for run()
