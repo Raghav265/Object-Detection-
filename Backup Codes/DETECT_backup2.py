@@ -1,18 +1,16 @@
 # ===================== TEXT TO SPEECH =====================
-import pyttsx3
-import time
-import asyncio
-import edge_tts
-import pygame
-import tempfile
 # =========================================================
-
 # Ultralytics 🚀 AGPL-3.0 License
 import argparse
+import asyncio
 import os
-import platform
 import sys
+import tempfile
 from pathlib import Path
+
+import edge_tts
+import pygame
+import pyttsx3
 import torch
 
 FILE = Path(__file__).resolve()
@@ -22,6 +20,7 @@ if str(ROOT) not in sys.path:
 ROOT = Path(os.path.relpath(ROOT, Path.cwd()))
 
 pygame.mixer.init()
+
 
 async def speak_async(text):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f:
@@ -38,25 +37,19 @@ async def speak_async(text):
 
 
 from ultralytics.utils.plotting import Annotator, colors
+
 from models.common import DetectMultiBackend
-from utils.dataloaders import IMG_FORMATS, VID_FORMATS, LoadImages, LoadScreenshots, LoadStreams
+from utils.dataloaders import LoadStreams
 from utils.general import (
     LOGGER,
     Profile,
-    check_file,
     check_img_size,
-    check_imshow,
-    check_requirements,
-    colorstr,
     cv2,
-    increment_path,
     non_max_suppression,
     print_args,
     scale_boxes,
-    strip_optimizer,
 )
 from utils.torch_utils import select_device, smart_inference_mode
-
 
 # -------- DISTANCE FILTER --------
 CLOSE_OBJECT_AREA = 20000
@@ -86,23 +79,19 @@ def run(
     spoken_objects = {}
     disappearance_frames = 20
 
-    save_img = False
-    webcam = True
-
     device = select_device(device)
     model = DetectMultiBackend(weights, device=device, data=data)
 
-    stride, names, pt = model.stride, model.names, model.pt
+    stride, names, _pt = model.stride, model.names, model.pt
     imgsz = check_img_size(imgsz, s=stride)
 
     dataset = LoadStreams(source, img_size=imgsz, stride=stride)
 
     model.warmup(imgsz=(1, 3, *imgsz))
 
-    seen, windows, dt = 0, [], (Profile(device=device), Profile(device=device), Profile(device=device))
+    _seen, _windows, dt = 0, [], (Profile(device=device), Profile(device=device), Profile(device=device))
 
     for path, im, im0s, vid_cap, s in dataset:
-
         current_frame_objects = set()
 
         with dt[0]:
@@ -119,17 +108,14 @@ def run(
             pred = non_max_suppression(pred, conf_thres, iou_thres)
 
         for i, det in enumerate(pred):
-
             im0 = im0s[i].copy()
 
             annotator = Annotator(im0, line_width=3, example=str(names))
 
             if len(det):
-
                 det[:, :4] = scale_boxes(im.shape[2:], det[:, :4], im0.shape).round()
 
                 for *xyxy, conf, cls in reversed(det):
-
                     c = int(cls)
                     object_name = names[c]
 
@@ -159,7 +145,6 @@ def run(
                     current_frame_objects.add(speech_text)
 
                     if speech_text not in spoken_objects and not is_speaking:
-
                         print("Speaking:", speech_text)
 
                         try:
@@ -184,7 +169,6 @@ def run(
                         del spoken_objects[obj]
 
             if view_img:
-
                 cv2.imshow("Detection", im0)
 
                 if cv2.waitKey(1) == ord("q"):
